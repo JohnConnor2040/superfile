@@ -101,6 +101,9 @@ type model struct {
 	// whether usable trash directory exists or not
 	hasTrash bool
 
+	// lastLeftClick is the previous left click, used to recognise double clicks.
+	lastLeftClick leftClick
+
 	// mouseRegions maps terminal coordinates onto the widget drawn there. It is
 	// rebuilt on every render pass, so it always describes the frame currently
 	// on screen rather than the layout as it will be after the next update.

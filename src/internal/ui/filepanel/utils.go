@@ -141,6 +141,18 @@ func (m *Model) ToggleReverseSort() {
 	m.SortReversed = !m.SortReversed
 }
 
+// SetCursorToIndex moves the cursor to an absolute element index, scrolling the
+// rendered range when the index is off screen. It reports whether the index was
+// within range, letting callers distinguish a rejected request from an accepted
+// one that happened to be a no-op.
+func (m *Model) SetCursorToIndex(index int) bool {
+	if index < 0 || index >= m.ElemCount() {
+		return false
+	}
+	m.scrollToCursor(index)
+	return true
+}
+
 // SetCursorPosition sets cursor and updates renderIndex accordingly.
 // Note: Intended for test utilities only!!!!!
 func (m *Model) SetCursorPosition(cursor int) {
