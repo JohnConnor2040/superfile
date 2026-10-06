@@ -94,7 +94,13 @@ func (m *Model) renderFileEntries(r *rendering.Renderer) {
 			colData := column.Render(itemIndex)
 			builder.WriteString(colData)
 		}
-		r.AddLines(builder.String())
+		line := builder.String()
+		if itemIndex == m.dropTarget {
+			// The row a drag would land on, so the drop point is visible while
+			// the pointer is held down.
+			line = common.FilePanelDropTargetStyle.Render(line)
+		}
+		r.AddLines(line)
 	}
 }
 

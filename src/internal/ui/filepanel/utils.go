@@ -225,3 +225,18 @@ func (m *Model) FindElementIndexByLocation(location string) int {
 	}
 	return -1
 }
+
+// SetDropTarget marks the row a drag would be dropped on, or clears the mark with
+// NoDropTarget.
+//
+// This is separate from the cursor, because the cursor says where the keyboard
+// is and this says where a drop would land, and a drag can be cancelled, which
+// has to leave the cursor alone.
+func (m *Model) SetDropTarget(index int) {
+	m.dropTarget = index
+}
+
+// DropTarget returns the marked row, or NoDropTarget when no row is marked.
+func (m *Model) DropTarget() int {
+	return m.dropTarget
+}

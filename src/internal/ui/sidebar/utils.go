@@ -120,3 +120,18 @@ func (m *Model) SetHeight(height int) {
 func (m *Model) Disabled() bool {
 	return m.disabled
 }
+
+// GetDirectoryLocation returns the path of the directory at an index, without
+// moving the cursor to it.
+//
+// A drag needs to know which directory the pointer is over, and that must not
+// change what the cursor was pointing at.
+func (s *Model) GetDirectoryLocation(index int) string {
+	if index < 0 || index >= len(s.directories) {
+		return ""
+	}
+	if s.directories[index].isDivider() {
+		return ""
+	}
+	return s.directories[index].Location
+}

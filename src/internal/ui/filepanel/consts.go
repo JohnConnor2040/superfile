@@ -31,3 +31,6 @@ const (
 
 	emptyCursor = " "
 )
+
+// NoDropTarget means no row is marked as a drop target.
+const NoDropTarget = -1

@@ -301,6 +301,10 @@ func (m *model) handleKeyInput(msg tea.KeyPressMsg) tea.Cmd {
 	case m.notifyModel.IsOpen():
 		cmd = m.notifyModelOpenKey(msg.String())
 
+	// A drag in progress is abandoned rather than dropped, because the pointer
+	// has to be where the drop belongs and there is no pointer involved here.
+	case m.handleDragKeyInput(msg.String()):
+
 	// The context menu captures input while it is open, so that keys move the
 	// menu rather than the panels underneath it.
 	case m.contextMenu.IsOpen():

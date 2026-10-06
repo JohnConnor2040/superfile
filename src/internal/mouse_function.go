@@ -80,12 +80,27 @@ func (m *model) handleMouseMsg(msg tea.MouseMsg) tea.Cmd {
 		return nil
 	}
 
+	if release, isRelease := msg.(tea.MouseReleaseMsg); isRelease {
+		return m.handleMouseRelease(release.Mouse())
+	}
+
 	click, isClick := msg.(tea.MouseClickMsg)
 	if !isClick {
-		// Release carries no action of its own yet. Drag and drop reads it.
 		return nil
 	}
 	return m.handleMouseClick(click.Mouse())
+}
+
+// handleMouseRelease ends whatever the press started.
+//
+// A release only matters if a drag is running, because an ordinary click was
+// already handled when it was pressed. A terminal may report the release with the
+// button that was let go or with no button at all, so both are accepted.
+func (m *model) handleMouseRelease(event tea.Mouse) tea.Cmd {
+	if event.Button != tea.MouseLeft && event.Button != tea.MouseNone {
+		return nil
+	}
+	return m.finishDrag()
 }
 
 // handleMouseMotion tracks the pointer while no button is held.
@@ -93,9 +108,16 @@ func (m *model) handleMouseMsg(msg tea.MouseMsg) tea.Cmd {
 // Only the open context menu reacts to this, by highlighting the entry under the
 // pointer so that the mouse and the keyboard agree on what is chosen.
 func (m *model) handleMouseMotion(event tea.Mouse) {
-	// A wheel scroll also arrives as motion while the button is held, and that
-	// is not the pointer moving.
-	if event.Button != tea.MouseNone || !m.contextMenu.IsOpen() {
+	// Motion with a button held is a drag, which is not the pointer moving over
+	// the menu. A wheel scroll also arrives as motion with the wheel held.
+	if event.Button != tea.MouseNone {
+		if event.Button == tea.MouseLeft {
+			m.trackDragMotion(event.X, event.Y)
+		}
+		return
+	}
+
+	if !m.contextMenu.IsOpen() {
 		return
 	}
 
@@ -140,6 +162,13 @@ func (m *model) handleMouseClick(event tea.Mouse) tea.Cmd {
 		m.lastLeftClick = leftClick{}
 	} else {
 		isDoubleClick = m.noteLeftClick(target)
+	}
+
+	// A press on a file entry is recorded so that moving the pointer afterwards
+	// can turn it into a drag. The click has already been acted on by here, so a
+	// press that never moves is still just a click.
+	if event.Button == tea.MouseLeft {
+		m.noteLeftPress(target, event.X, event.Y)
 	}
 
 	switch target.Kind {

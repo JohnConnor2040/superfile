@@ -72,7 +72,9 @@ type model struct {
 	spfError    spferror.Model
 	// contextMenu is the right click menu. It is an overlay anchored to the
 	// pointer rather than a centred modal.
-	contextMenu     contextmenu.Model
+	contextMenu contextmenu.Model
+	// drag is the drag in progress, if any. It is empty when no drag is running.
+	drag            dragState
 	mutexErrorModal sync.Mutex
 
 	// Zoxide client for directory tracking
