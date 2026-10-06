@@ -207,6 +207,18 @@ func (m *model) panelCreateNewFolder() {
 	m.typingModal.directory = true
 }
 
+// closeContextMenu dismisses the menu, if it is open.
+//
+// It is nil when there was nothing to dismiss, so a caller can pass its result
+// straight back as the command for the message that triggered it.
+func (m *model) closeContextMenu() tea.Cmd {
+	if !m.contextMenu.IsOpen() {
+		return nil
+	}
+	m.contextMenu.Close()
+	return nil
+}
+
 // contextMenuKey handles keys while the context menu is open.
 func (m *model) contextMenuKey(msg string) tea.Cmd {
 	switch {

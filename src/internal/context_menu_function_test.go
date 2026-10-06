@@ -8,13 +8,18 @@ import (
 	"strings"
 	"testing"
 
+	variable "github.com/yorukot/superfile/src/config"
+
 	tea "charm.land/bubbletea/v2"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/yorukot/superfile/src/internal/common"
 	"github.com/yorukot/superfile/src/internal/mouse"
 	"github.com/yorukot/superfile/src/internal/ui/contextmenu"
 	"github.com/yorukot/superfile/src/internal/ui/filepanel"
+	"github.com/yorukot/superfile/src/internal/ui/spferror"
+	"github.com/yorukot/superfile/src/pkg/utils"
 )
 
 // rightClickAt builds a right button press at the given coordinates.
@@ -521,4 +526,127 @@ func TestMenuFooterShowsTheWholeCount(t *testing.T) {
 		assert.Contains(t, rendered, want,
 			"the footer should show %q when the cursor is on entry %d", want, cursor)
 	}
+}
+
+// useTemporaryPinnedFile points the pinned file at a temporary one for the rest of
+// the test, so that pinning in a test cannot rewrite the user's real pinned list.
+//
+// The sidebar captures the path when it is built, so this has to run before the
+// model under test is created.
+func useTemporaryPinnedFile(t *testing.T) {
+	t.Helper()
+	previous := variable.PinnedFile
+	//nolint:reassign // Test fixture, restored by the cleanup below.
+	variable.PinnedFile = filepath.Join(t.TempDir(), "pinned.json")
+	t.Cleanup(func() {
+		//nolint:reassign // Restoring the pinned file after the test.
+		variable.PinnedFile = previous
+	})
+}
+
+// TestMouseIsIgnoredWhileAModalIsOpen checks that a modal captures the pointer as
+// well as the keyboard.
+//
+// Keys are already routed to whichever modal is open, so a click reaching the
+// panels behind one would move the cursor, focus, and selection out from under
+// the modal, and a click on a menu entry above one would dispatch its action.
+func TestMouseIsIgnoredWhileAModalIsOpen(t *testing.T) {
+	modals := []struct {
+		name    string
+		prepare func(t *testing.T)
+		open    func(m *model)
+		close   func(m *model)
+	}{
+		{"typing", nil, func(m *model) {
+			m.typingModal.open = true
+		}, func(m *model) { m.typingModal.open = false }},
+		{"prompt", nil, func(m *model) {
+			TeaUpdate(m, utils.TeaRuneKeyMsg(common.Hotkeys.OpenSPFPrompt[0]))
+		}, func(m *model) {
+			TeaUpdate(m, utils.TeaRuneKeyMsg(common.Hotkeys.CancelTyping[0]))
+		}},
+		{"notify", nil, func(m *model) {
+			m.notifyModel.Open()
+		}, func(m *model) { m.notifyModel.Close() }},
+		{"zoxide", nil, func(m *model) {
+			m.zoxideModal.Open()
+		}, func(m *model) { m.zoxideModal.Close() }},
+		{"sort", nil, func(m *model) {
+			m.sortModal.Open(m.getFocusedFilePanel().SortKind)
+		}, func(m *model) { m.sortModal.Close() }},
+		{"help menu", nil, func(m *model) {
+			m.helpMenu.Open()
+		}, func(m *model) { m.helpMenu.Close() }},
+		{"spf error", nil, func(m *model) {
+			m.spfError = spferror.New(true, "Error", "boom",
+				&spferror.FileListErrorState{})
+		}, func(m *model) { m.spfError = spferror.Model{} }},
+		{"file rename", nil, func(m *model) {
+			m.fileModel.Renaming = true
+		}, func(m *model) { m.fileModel.Renaming = false }},
+		{"sidebar rename", useTemporaryPinnedFile, func(m *model) {
+			// Only a pinned directory can be renamed, so one is pinned and selected.
+			dir := m.getFocusedFilePanel().Location
+			require.NoError(t, m.sidebarModel.TogglePinnedDirectory(dir))
+			m.sidebarModel.UpdateDirectories()
+			// Pinned entries come after the well known ones and behind a divider, so
+			// the rows are walked until one of them can be renamed.
+			for i := 0; i < 30 && !m.sidebarModel.IsRenaming(); i++ {
+				m.sidebarModel.SetCursor(i)
+				m.sidebarModel.PinnedItemRename()
+			}
+			require.True(t, m.sidebarModel.IsRenaming(), "the pinned entry should be renaming")
+		}, func(m *model) { m.sidebarModel.CancelSidebarRename() }},
+	}
+
+	for _, modal := range modals {
+		t.Run(modal.name, func(t *testing.T) {
+			if modal.prepare != nil {
+				modal.prepare(t)
+			}
+			m := defaultTestModel(dirWithFiles(t, 5))
+			fileRows := m.getFocusedFilePanel().ElemCount()
+			cursor := m.getFocusedFilePanel().GetCursor()
+
+			modal.open(m)
+			t.Cleanup(func() { modal.close(m) })
+			require.True(t, m.modalBlocksMouse(), "%s should capture the mouse", modal.name)
+
+			x, y := mustFindCell(t, m, mouse.TargetFilePanelItem, fileRows-1)
+			// The rendered screen covers cursor, focus, and selection at once, so
+			// comparing it proves that nothing underneath the modal moved.
+			before := m.viewContent()
+
+			m.handleMouseMsg(leftClickAt(x, y))
+			require.Empty(t, m.contextMenu.Items(), "a click must not open a menu over a modal")
+			require.Equal(t, before, m.viewContent(), "a click must not change the screen")
+
+			m.handleMouseMsg(rightClickAt(x, y))
+			require.Empty(t, m.contextMenu.Items(),
+				"a right click must not open a menu over a modal either")
+			require.Equal(t, before, m.viewContent(), "a right click must not change the screen")
+			require.Equal(t, cursor, m.getFocusedFilePanel().GetCursor(),
+				"the panel cursor must not move underneath the modal")
+		})
+	}
+}
+
+// TestAModalDismissesAMenuOpenedBeforeIt checks the other ordering: the menu was
+// already open when the modal appeared.
+//
+// The menu renders above most modals, so a click on it would otherwise dispatch
+// an action over the modal. Dismissing it means the click does nothing at all.
+func TestAModalDismissesAMenuOpenedBeforeIt(t *testing.T) {
+	m := defaultTestModel(dirWithFiles(t, 5))
+	fileRows := m.getFocusedFilePanel().ElemCount()
+
+	x, y := mustFindCell(t, m, mouse.TargetFilePanelItem, fileRows-1)
+	m.handleMouseMsg(rightClickAt(x, y))
+	require.NotEmpty(t, m.contextMenu.Items(), "the right click should have opened a menu")
+
+	m.notifyModel.Open()
+	t.Cleanup(m.notifyModel.Close)
+
+	m.handleMouseMsg(leftClickAt(x, y))
+	require.Empty(t, m.contextMenu.Items(), "a modal should have dismissed the menu")
 }

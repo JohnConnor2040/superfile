@@ -35,10 +35,36 @@ type leftClick struct {
 	at time.Time
 }
 
+// modalBlocksMouse reports whether a modal is covering the screen.
+//
+// The keyboard is already gated on the modal states below, so a modal only
+// captures keys today. Without the same gate for the pointer, a right click
+// would move the panel cursor, focus, and selection underneath a modal, and a
+// click on a context menu entry would dispatch its action over the top of one.
+func (m *model) modalBlocksMouse() bool {
+	return m.typingModal.open ||
+		m.promptModal.IsOpen() ||
+		m.notifyModel.IsOpen() ||
+		m.zoxideModal.IsOpen() ||
+		m.sortModal.IsOpen() ||
+		m.helpMenu.IsOpen() ||
+		m.spfError.IsOpen() ||
+		m.fileModel.Renaming ||
+		m.sidebarModel.IsRenaming()
+}
+
 // handleMouseMsg resolves a mouse event against the hit-test regions published
 // by the last render.
 func (m *model) handleMouseMsg(msg tea.MouseMsg) tea.Cmd {
 	event := msg.Mouse()
+
+	// A modal that was open when a context menu opened does not become
+	// dismissible by clicking the menu underneath it, so the menu goes first and
+	// the click that closed it is consumed rather than falling through to
+	// whatever it landed on.
+	if m.modalBlocksMouse() {
+		return m.closeContextMenu()
+	}
 
 	if event.Button == tea.MouseWheelUp {
 		wheelMainAction(wheelUpAction, m)
