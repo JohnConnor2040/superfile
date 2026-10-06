@@ -22,6 +22,12 @@ import (
 	"github.com/yorukot/superfile/src/pkg/utils"
 )
 
+// backgroundMenuLabels is what the background context menu offers. The same
+// labels are asserted in more than one place, so they are written once.
+func backgroundMenuLabels() []string {
+	return []string{"Paste", "New file", "New folder"}
+}
+
 // rightClickAt builds a right button press at the given coordinates.
 func rightClickAt(x, y int) tea.MouseClickMsg {
 	return tea.MouseClickMsg{X: x, Y: y, Button: tea.MouseRight}
@@ -275,7 +281,44 @@ func TestRightClickOnEmptyPanelOffersCreateAndPaste(t *testing.T) {
 	require.True(t, m.contextMenu.IsOpen())
 
 	labels := menuLabels(m)
-	assert.Equal(t, []string{"Paste", "New file", "New folder"}, labels)
+	assert.Equal(t, backgroundMenuLabels(), labels)
+}
+
+// TestRightClickOnBackgroundFocusesThatPanel checks that the panel the pointer is
+// over becomes the focused one before its background menu is offered.
+//
+// Paste, new file, and new folder all act on the focused panel, so leaving focus
+// where the keyboard had it would put the new entry in a directory the user never
+// pointed at.
+func TestRightClickOnBackgroundFocusesThatPanel(t *testing.T) {
+	dir := dirWithFiles(t, 3)
+	other := t.TempDir()
+	m := defaultTestModel(dir)
+	_, err := m.fileModel.CreateNewFilePanel(other)
+	require.NoError(t, err)
+	require.Equal(t, 2, m.fileModel.PanelCount())
+	m.viewContent()
+
+	// Focus is deliberately put on the first panel, which is not the one the
+	// pointer will be over.
+	m.focusFilePanelOnMouse(0)
+	require.Equal(t, 0, m.fileModel.FocusedPanelIndex,
+		"focus has to start on a panel other than the second for this to mean anything")
+
+	// The area of the second panel, below the entries.
+	x := m.filePanelAreaX() + m.fileModel.PanelOriginX(1) + 2
+	y := m.mainPanelHeight - 1
+	require.Equal(t, mouse.TargetUnknown, m.mouseTargetAt(x, y).Kind,
+		"this coordinate should be the second panel's background")
+
+	m.handleMouseMsg(rightClickAt(x, y))
+
+	require.True(t, m.contextMenu.IsOpen(), "the background menu should be open")
+	assert.Equal(t, backgroundMenuLabels(), menuLabels(m))
+	assert.Equal(t, 1, m.fileModel.FocusedPanelIndex,
+		"the panel the pointer was over should have the focus")
+	assert.Equal(t, other, m.getFocusedFilePanel().Location,
+		"the menu should act on the panel the pointer was over, not on the old focus")
 }
 
 // TestRightClickWithoutApplicableTargetClosesMenu checks a right click with

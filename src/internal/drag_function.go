@@ -113,10 +113,21 @@ func (m *model) trackDragMotion(x, y int) bool {
 		m.lastLeftClick = leftClick{}
 	}
 
+	m.updateDragAt(x, y)
+	return true
+}
+
+// updateDragAt resolves what the drag would drop onto, given a terminal position.
+//
+// Both motion and the release call it, because the release is the one that
+// decides where the files actually go and a terminal is allowed to skip motion
+// events. Resolving there too means a release over a directory other than the
+// last one seen still drops into the directory the pointer is really over, and a
+// release over nowhere clears the destination instead of remembering an old one.
+func (m *model) updateDragAt(x, y int) {
 	m.drag.target = m.mouseTargetAt(x, y)
 	m.drag.destLocation = m.dropLocationFor(m.drag.target, x, y)
 	m.setDropTargets()
-	return true
 }
 
 // dropLocationFor resolves what the drag would move into, or an empty string
@@ -189,14 +200,21 @@ func (m *model) dragIsInvalidFor(dest string) bool {
 	return false
 }
 
-// filePanelIndexAtX returns the panel whose area contains a column, or -1.
+// filePanelIndexAtX returns the panel whose border covers a terminal column, or
+// -1 for a column that belongs to none of them.
+//
+// The column arrives in terminal coordinates, while panel origins are measured
+// from the start of the panel area, so the sidebar's width comes off first. The
+// full panel width is used rather than the content width, because the regions
+// that resolve a pointer to a panel cover the border columns too.
 func (m *model) filePanelIndexAtX(x int) int {
+	x -= m.filePanelAreaX()
+	if x < 0 {
+		return -1
+	}
 	for i := range m.fileModel.FilePanels {
-		if i == 0 && x < m.fileModel.PanelOriginX(i) {
-			continue
-		}
 		origin := m.fileModel.PanelOriginX(i)
-		if x >= origin && x < origin+m.fileModel.FilePanels[i].GetContentWidth() {
+		if x >= origin && x < origin+m.fileModel.FilePanels[i].GetWidth() {
 			return i
 		}
 	}

@@ -35,10 +35,18 @@ func (m *model) contextMenuItems(target mouse.Target, x, y int) []contextmenu.It
 	case mouse.TargetSidebarDirectory:
 		return m.sidebarDirectoryContextItems(target)
 	case mouse.TargetUnknown:
-		if m.inFilePanelArea(x, y) {
-			return backgroundContextItems()
+		if !m.inFilePanelArea(x, y) {
+			return nil
 		}
-		return nil
+		// Paste, new file, and new folder all act on the focused panel, so the
+		// panel the pointer is over has to be the one focused first. A right
+		// click does not go through the click handlers that would do it, and
+		// leaving focus where it was would put the new entry in a directory the
+		// user never pointed at.
+		if panelIndex := m.filePanelIndexAtX(x); panelIndex >= 0 {
+			m.focusFilePanelOnMouse(panelIndex)
+		}
+		return backgroundContextItems()
 	case mouse.TargetProcessBarItem, mouse.TargetMetadataItem, mouse.TargetContextMenuItem:
 		// The process bar and the metadata panel have no actions to offer yet,
 		// and a right click that landed on the open menu itself only moves it.
@@ -57,7 +65,7 @@ func (m *model) inFilePanelArea(x, y int) bool {
 	if y >= m.mainPanelHeight {
 		return false
 	}
-	if common.Config.SidebarWidth != 0 && x < common.Config.SidebarWidth+common.BorderPadding {
+	if x < m.filePanelAreaX() {
 		return false
 	}
 	return x < m.fullWidth

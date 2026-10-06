@@ -100,6 +100,11 @@ func (m *model) handleMouseRelease(event tea.Mouse) tea.Cmd {
 	if event.Button != tea.MouseLeft && event.Button != tea.MouseNone {
 		return nil
 	}
+	// The release is the drop, so the destination is resolved from the release
+	// coordinates rather than from the last motion that happened to arrive.
+	if m.drag.active {
+		m.updateDragAt(event.X, event.Y)
+	}
 	return m.finishDrag()
 }
 
@@ -236,8 +241,14 @@ func (m *model) handleFilePanelClick(target mouse.Target, mod tea.KeyMod, isDoub
 
 	if isDoubleClick {
 		// A double click is what enters a directory or opens a file, matching
-		// the keyboard where the cursor is moved first and entered after.
-		m.enterPanel()
+		// the keyboard where the cursor is moved first and entered after. The
+		// cursor is moved to the row that was clicked because keyboard input
+		// stays available while a drag is pending, so a key could have put the
+		// cursor somewhere else between the two clicks and enterPanel would then
+		// have opened a row the user never pointed at.
+		if panel.SetCursorToIndex(target.ItemIndex) {
+			m.enterPanel()
+		}
 		return nil
 	}
 

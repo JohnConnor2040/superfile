@@ -1,6 +1,7 @@
 package internal
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -9,8 +10,10 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/yorukot/superfile/src/internal/common"
 	"github.com/yorukot/superfile/src/internal/mouse"
 	"github.com/yorukot/superfile/src/internal/ui/filepanel"
+	"github.com/yorukot/superfile/src/pkg/utils"
 )
 
 // mouseMotionAt builds a motion event with the left button held, which is how a
@@ -72,6 +75,21 @@ func directoryRow(panel *filepanel.Model) int {
 	return -1
 }
 
+// directoryRows returns the element indices of the first two directories in a
+// panel, in the order they are listed.
+func directoryRows(t *testing.T, panel *filepanel.Model) (int, int) {
+	t.Helper()
+
+	rows := []int{}
+	for i := range panel.ElemCount() {
+		if panel.GetElementAtIdx(i).Directory {
+			rows = append(rows, i)
+		}
+	}
+	require.Len(t, rows, 2, "the panel should list exactly two directories")
+	return rows[0], rows[1]
+}
+
 // lastRow returns the element index of the last entry in a panel.
 func lastRow(panel *filepanel.Model) int {
 	return panel.ElemCount() - 1
@@ -125,38 +143,71 @@ func TestDragMovesFileIntoDirectory(t *testing.T) {
 
 // TestDragIntoOtherPanelUsesThatPanelsDirectory checks that the destination comes
 // from the panel the pointer is over, not the panel the drag started in.
+//
+// It runs with the sidebar hidden and shown, because the sidebar shifts every
+// panel by its width and a destination resolved against the wrong origin moves
+// the files into the wrong directory without saying so.
 func TestDragIntoOtherPanelUsesThatPanelsDirectory(t *testing.T) {
-	dir := dirWithFiles(t, 5)
-	other := t.TempDir()
-	m := defaultTestModelWithFooterAndFilePreview(dir)
-	// A second panel showing a different directory. It has no entries loaded,
-	// which is all that is needed, since the drop lands on its area.
-	_, err := m.fileModel.CreateNewFilePanel(other)
-	require.NoError(t, err)
-	require.Equal(t, 2, m.fileModel.PanelCount())
-	m.viewContent()
+	for _, sidebarWidth := range []int{0, 22} {
+		t.Run(fmt.Sprintf("sidebar=%d", sidebarWidth), func(t *testing.T) {
+			previous := common.Config.SidebarWidth
+			common.Config.SidebarWidth = sidebarWidth
+			t.Cleanup(func() {
+				common.Config.SidebarWidth = previous
+			})
 
-	panel := &m.fileModel.FilePanels[0]
-	srcRow := lastRow(panel)
-	moved := panel.GetElementAtIdx(srcRow).Location
-	fromX, fromY := mustFindCell(t, m, mouse.TargetFilePanelItem, srcRow)
+			dir := dirWithFiles(t, 5)
+			other := t.TempDir()
+			m := defaultTestModelWithFooterAndFilePreview(dir)
+			// A second panel showing a different directory. It has no entries loaded,
+			// which is all that is needed, since the drop lands on its area.
+			_, err := m.fileModel.CreateNewFilePanel(other)
+			require.NoError(t, err)
+			require.Equal(t, 2, m.fileModel.PanelCount())
+			m.viewContent()
 
-	// The area of the second panel means the directory that panel is showing.
-	toX := m.fileModel.PanelOriginX(1) + 1
-	toY := m.mainPanelHeight - 1
-	require.Equal(t, mouse.TargetUnknown, m.mouseTargetAt(toX, toY).Kind)
+			panel := &m.fileModel.FilePanels[0]
+			srcRow := lastRow(panel)
+			moved := panel.GetElementAtIdx(srcRow).Location
+			fromX, fromY := mustFindCell(t, m, mouse.TargetFilePanelItem, srcRow)
 
-	startDrag(t, m, fromX, fromY, toX, toY)
-	cmd := m.handleMouseMsg(mouseReleaseAt(toX, toY))
+			// Every column of every panel has to resolve to that panel. The sidebar
+			// shifts each panel right by its width, so comparing a terminal column
+			// against an origin that ignores the sidebar hands the far end of one
+			// panel to the next, which silently moves the files into the wrong
+			// directory.
+			for i := range m.fileModel.FilePanels {
+				for _, offset := range []int{0, 1, m.fileModel.FilePanels[i].GetWidth() - 1} {
+					column := m.filePanelAreaX() + m.fileModel.PanelOriginX(i) + offset
+					require.Equal(t, i, m.filePanelIndexAtX(column),
+						"column %d should belong to panel %d", column, i)
+				}
+			}
+			require.Equal(t, -1, m.filePanelIndexAtX(m.filePanelAreaX()-1),
+				"a column inside the sidebar belongs to no panel")
 
-	require.NotNil(t, cmd, "the area around a panel is a drop target")
-	runCmd(cmd)
+			// The area of the second panel means the directory that panel is showing.
+			// The coordinate is a terminal one, so the panel area starts after the
+			// sidebar rather than at the left edge of the screen.
+			toX := m.filePanelAreaX() + m.fileModel.PanelOriginX(1) + 1
+			toY := m.mainPanelHeight - 1
+			require.Equal(t, mouse.TargetUnknown, m.mouseTargetAt(toX, toY).Kind)
+			require.Equal(t, 1, m.filePanelIndexAtX(toX),
+				"the column should resolve to the panel it is drawn inside")
 
-	assert.Eventually(t, func() bool {
-		return fileExists(filepath.Join(other, filepath.Base(moved)))
-	}, DefaultTestTimeout, DefaultTestTick,
-		"the file should have moved into the directory the second panel shows")
-	assert.NoFileExists(t, moved)
+			startDrag(t, m, fromX, fromY, toX, toY)
+			cmd := m.handleMouseMsg(mouseReleaseAt(toX, toY))
+
+			require.NotNil(t, cmd, "the area around a panel is a drop target")
+			runCmd(cmd)
+
+			assert.Eventually(t, func() bool {
+				return fileExists(filepath.Join(other, filepath.Base(moved)))
+			}, DefaultTestTimeout, DefaultTestTick,
+				"the file should have moved into the directory the second panel shows")
+			assert.NoFileExists(t, moved)
+		})
+	}
 }
 
 // TestSmallMovementIsStillAClick checks that a press which jitters does not turn
@@ -421,6 +472,114 @@ func TestDragOutsideSelectionCarriesOnlyThatEntry(t *testing.T) {
 
 // TestDragDoesNotLeaveAPendingDoubleClick checks a drag cannot be mistaken for the
 // first half of a double click, which would open the dragged file.
+// TestReleaseDropsWhereThePointerActuallyIs checks that the release decides the
+// destination rather than the last motion event that happened to arrive.
+//
+// A terminal is allowed to skip motion events, so the last one seen can name a
+// different directory from the one the pointer is really over when the button
+// goes up.
+func TestReleaseDropsWhereThePointerActuallyIs(t *testing.T) {
+	// Two directories are needed, because the drag aims at one and is released
+	// over the other.
+	dir := t.TempDir()
+	first := filepath.Join(dir, "aaa")
+	second := filepath.Join(dir, "bbb")
+	require.NoError(t, os.Mkdir(first, 0o755))
+	require.NoError(t, os.Mkdir(second, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "moved.txt"), []byte("x"), 0o600))
+
+	m := defaultTestModel(dir)
+	panel := m.getFocusedFilePanel()
+
+	srcRow := mustFileRow(t, panel)
+	moved := panel.GetElementAtIdx(srcRow).Location
+	require.Equal(t, filepath.Join(dir, "moved.txt"), moved)
+
+	firstDir, secondDir := directoryRows(t, panel)
+	require.Equal(t, first, panel.GetElementAtIdx(firstDir).Location,
+		"the two directories should both be listed")
+	require.Equal(t, second, panel.GetElementAtIdx(secondDir).Location,
+		"the two directories should both be listed")
+
+	fromX, fromY := mustFindCell(t, m, mouse.TargetFilePanelItem, srcRow)
+	firstX, firstY := mustFindCell(t, m, mouse.TargetFilePanelItem, firstDir)
+	secondX, secondY := mustFindCell(t, m, mouse.TargetFilePanelItem, secondDir)
+
+	// Move onto the first directory, then release over the second one.
+	startDrag(t, m, fromX, fromY, firstX, firstY)
+	require.Equal(t, panel.GetElementAtIdx(firstDir).Location, m.drag.destLocation,
+		"the pointer should be over the first directory before the release")
+
+	cmd := m.handleMouseMsg(mouseReleaseAt(secondX, secondY))
+	require.NotNil(t, cmd, "the release over the second directory is a drop")
+	runCmd(cmd)
+
+	assert.Eventually(t, func() bool {
+		return fileExists(filepath.Join(second, "moved.txt"))
+	}, DefaultTestTimeout, DefaultTestTick,
+		"the file should land in the directory the release was over, not the last motion")
+	assert.NoFileExists(t, moved)
+}
+
+// TestReleaseOutsideAnyTargetDropsNothing checks that a release over nowhere
+// clears the destination instead of remembering the one the motion last saw.
+func TestReleaseOutsideAnyTargetDropsNothing(t *testing.T) {
+	dir := dirWithFiles(t, 5)
+	m := defaultTestModel(dir)
+	panel := m.getFocusedFilePanel()
+
+	srcRow := lastRow(panel)
+	moved := panel.GetElementAtIdx(srcRow).Location
+	destRow := mustDirectoryRow(t, panel)
+
+	fromX, fromY := mustFindCell(t, m, mouse.TargetFilePanelItem, srcRow)
+	toX, toY := mustFindCell(t, m, mouse.TargetFilePanelItem, destRow)
+
+	startDrag(t, m, fromX, fromY, toX, toY)
+	require.NotEmpty(t, m.drag.destLocation, "the drag should be aimed at a directory")
+
+	// Below the panels there is nowhere to drop, and that is also the footer.
+	cmd := m.handleMouseMsg(mouseReleaseAt(fromX, m.mainPanelHeight+2))
+	require.Nil(t, cmd, "a release over nowhere must not move anything")
+	require.Empty(t, m.drag.destLocation, "the destination should have been cleared")
+
+	assert.FileExists(t, moved, "the file should still be where it was")
+}
+
+// TestDoubleClickOpensTheRowThatWasClicked checks that a double click enters the
+// row it landed on rather than wherever the keyboard had left the cursor.
+//
+// Keyboard input stays available while a drag is pending, so a key can move the
+// cursor between the two clicks of a double click.
+func TestDoubleClickOpensTheRowThatWasClicked(t *testing.T) {
+	dir := t.TempDir()
+	clicked := filepath.Join(dir, "aaa")
+	other := filepath.Join(dir, "bbb")
+	require.NoError(t, os.Mkdir(clicked, 0o755))
+	require.NoError(t, os.Mkdir(other, 0o755))
+
+	m := defaultTestModel(dir)
+	panel := m.getFocusedFilePanel()
+
+	clickedRow, otherRow := directoryRows(t, panel)
+	require.Equal(t, "aaa", panel.GetElementAtIdx(clickedRow).Name)
+	require.Equal(t, "bbb", panel.GetElementAtIdx(otherRow).Name)
+	x, y := mustFindCell(t, m, mouse.TargetFilePanelItem, clickedRow)
+
+	// First click, then a key that moves the cursor away, then the second click.
+	m.handleMouseMsg(leftClickAt(x, y))
+	m.handleKeyInput(utils.TeaRuneKeyMsg(common.Hotkeys.ListDown[0]))
+	require.NotEqual(t, clickedRow, panel.GetCursor(),
+		"the cursor should have moved away from the row that will be clicked again")
+
+	m.handleMouseMsg(leftClickAt(x, y))
+
+	assert.Equal(t, clicked, m.getFocusedFilePanel().Location,
+		"the double click should have entered the row it was on, not the cursor's row")
+	assert.NotEqual(t, other, m.getFocusedFilePanel().Location,
+		"the row the cursor was left on must not be the one that was entered")
+}
+
 func TestDragDoesNotLeaveAPendingDoubleClick(t *testing.T) {
 	dir := dirWithFiles(t, 5)
 	m := defaultTestModel(dir)
