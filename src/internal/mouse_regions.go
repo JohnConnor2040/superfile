@@ -25,6 +25,11 @@ func (m *model) updateMouseRegions() {
 		panelAreaX += common.BorderPadding
 	}
 	m.fileModel.MouseRegions(reg, panelAreaX, 0)
+
+	// The context menu is registered last so that it claims the cells it covers,
+	// which is what makes a click on a menu entry reach the menu rather than the
+	// widget it is drawn on top of.
+	m.contextMenu.MouseRegions(reg)
 }
 
 // mouseTargetAt returns the widget drawn at the given terminal coordinates.

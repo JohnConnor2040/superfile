@@ -13,6 +13,7 @@ import (
 
 	"github.com/yorukot/superfile/src/internal/mouse"
 
+	"github.com/yorukot/superfile/src/internal/ui/contextmenu"
 	"github.com/yorukot/superfile/src/internal/ui/filemodel"
 
 	"github.com/yorukot/superfile/src/internal/ui/metadata"
@@ -62,13 +63,16 @@ type model struct {
 	focusPanel      focusPanelType
 
 	// Modals
-	notifyModel     notify.Model
-	typingModal     typingModal
-	helpMenu        helpmenu.Model
-	promptModal     prompt.Model
-	zoxideModal     zoxideui.Model
-	sortModal       sortmodel.Model
-	spfError        spferror.Model
+	notifyModel notify.Model
+	typingModal typingModal
+	helpMenu    helpmenu.Model
+	promptModal prompt.Model
+	zoxideModal zoxideui.Model
+	sortModal   sortmodel.Model
+	spfError    spferror.Model
+	// contextMenu is the right click menu. It is an overlay anchored to the
+	// pointer rather than a centred modal.
+	contextMenu     contextmenu.Model
 	mutexErrorModal sync.Mutex
 
 	// Zoxide client for directory tracking
@@ -111,8 +115,12 @@ type model struct {
 }
 
 type typingModal struct {
-	location  string
-	open      bool
+	location string
+	open     bool
+	// directory makes the next typed name create a directory instead of a file,
+	// so that a caller can ask for a directory without the user having to know
+	// that a trailing path separator is what selects one.
+	directory bool
 	textInput textinput.Model
 }
 

@@ -49,13 +49,34 @@ func (m *model) handleMouseMsg(msg tea.MouseMsg) tea.Cmd {
 		return nil
 	}
 
+	if motion, isMotion := msg.(tea.MouseMotionMsg); isMotion {
+		m.handleMouseMotion(motion.Mouse())
+		return nil
+	}
+
 	click, isClick := msg.(tea.MouseClickMsg)
 	if !isClick {
-		// Motion and release carry no action of their own. Drag and drop reads
-		// the release.
+		// Release carries no action of its own yet. Drag and drop reads it.
 		return nil
 	}
 	return m.handleMouseClick(click.Mouse())
+}
+
+// handleMouseMotion tracks the pointer while no button is held.
+//
+// Only the open context menu reacts to this, by highlighting the entry under the
+// pointer so that the mouse and the keyboard agree on what is chosen.
+func (m *model) handleMouseMotion(event tea.Mouse) {
+	// A wheel scroll also arrives as motion while the button is held, and that
+	// is not the pointer moving.
+	if event.Button != tea.MouseNone || !m.contextMenu.IsOpen() {
+		return
+	}
+
+	target := m.mouseTargetAt(event.X, event.Y)
+	if target.Kind == mouse.TargetContextMenuItem {
+		m.contextMenu.HighlightItem(target.ItemIndex)
+	}
 }
 
 // isSelectionMod reports whether the modifiers turn a click into a selection
@@ -66,12 +87,23 @@ func isSelectionMod(mod tea.KeyMod) bool {
 
 // handleMouseClick acts on a completed button press.
 func (m *model) handleMouseClick(event tea.Mouse) tea.Cmd {
+	target := m.mouseTargetAt(event.X, event.Y)
+
+	// Right click always reopens the menu at the pointer, which is what lets an
+	// open menu be moved without being closed first.
+	if event.Button == tea.MouseRight {
+		return m.openContextMenu(target, event.X, event.Y)
+	}
+
 	if event.Button != tea.MouseLeft {
-		// Right click drives the context menu, which is handled separately.
 		return nil
 	}
 
-	target := m.mouseTargetAt(event.X, event.Y)
+	// While the menu is open it takes every click: one on an entry chooses it,
+	// one anywhere else just dismisses the menu.
+	if m.contextMenu.IsOpen() {
+		return m.handleContextMenuClick(target)
+	}
 
 	// A click carrying a selection modifier is part of building a selection
 	// rather than pointing at something, so it never counts as a double click
@@ -91,9 +123,12 @@ func (m *model) handleMouseClick(event tea.Mouse) tea.Cmd {
 		m.handleSidebarDirectoryClick(target.ItemIndex)
 	case mouse.TargetUnknown:
 		m.handleBackgroundClick(event.X, event.Y)
-	case mouse.TargetProcessBarItem, mouse.TargetMetadataItem, mouse.TargetContextMenuItem:
-		// These have no published regions yet, so a click landing on one of
-		// them resolves as the background instead.
+	case mouse.TargetProcessBarItem, mouse.TargetMetadataItem:
+		// These have no published regions yet, so a click landing on one of them
+		// resolves as the background instead.
+	case mouse.TargetContextMenuItem:
+		// The context menu is open here, so this click was already consumed by
+		// handleContextMenuClick above.
 	}
 	return nil
 }
@@ -117,6 +152,26 @@ func (m *model) noteLeftClick(target mouse.Target) bool {
 
 	m.lastLeftClick = leftClick{}
 	return true
+}
+
+// handleContextMenuClick acts on a click while the context menu is open.
+func (m *model) handleContextMenuClick(target mouse.Target) tea.Cmd {
+	if target.Kind != mouse.TargetContextMenuItem {
+		// A click away from the menu dismisses it without acting on whatever is
+		// underneath, so the click that closes a menu never has a side effect.
+		m.contextMenu.Close()
+		return nil
+	}
+
+	// The entry is highlighted first so that the chosen action is the one that
+	// was clicked, not the one the keyboard had left highlighted.
+	m.contextMenu.HighlightItem(target.ItemIndex)
+	action, ok := m.contextMenu.SelectedAction()
+	m.contextMenu.Close()
+	if !ok {
+		return nil
+	}
+	return m.runContextMenuAction(action)
 }
 
 // handleFilePanelClick acts on a click that landed on a file entry.
@@ -160,7 +215,8 @@ func (m *model) applyClickSelection(panel *filepanel.Model, itemIndex int, mod t
 		return true
 	case mod.Contains(tea.ModShift):
 		// Shift click selects everything between the anchor and this entry. The
-		// anchor stays put so that a second shift click can shrink the range.
+		// anchor stays put so that a second shift click measures from the same
+		// point again. The range only grows; a ctrl click is how it shrinks.
 		if panel.SelectRangeToIndex(itemIndex) {
 			return true
 		}

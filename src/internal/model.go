@@ -301,6 +301,11 @@ func (m *model) handleKeyInput(msg tea.KeyPressMsg) tea.Cmd {
 	case m.notifyModel.IsOpen():
 		cmd = m.notifyModelOpenKey(msg.String())
 
+	// The context menu captures input while it is open, so that keys move the
+	// menu rather than the panels underneath it.
+	case m.contextMenu.IsOpen():
+		cmd = m.contextMenuKey(msg.String())
+
 	// If renaming a object
 	case m.fileModel.Renaming:
 		cmd = m.renamingKey(msg.String())
@@ -536,6 +541,14 @@ func (m *model) updateRenderForOverlay(finalRender string) string {
 		overlayX := m.fullWidth/common.CenterDivisor - common.ModalWidth/common.CenterDivisor
 		overlayY := m.fullHeight/common.CenterDivisor - common.ModalHeight/common.CenterDivisor
 		return stringfunction.PlaceOverlay(overlayX, overlayY, errorModal, finalRender)
+	}
+
+	// The context menu is an overlay anchored to the pointer, so it is placed at
+	// the position it was opened at rather than centred. It sits above the panels
+	// but below the error modal, which must always be readable.
+	if m.contextMenu.IsOpen() {
+		return stringfunction.PlaceOverlay(m.contextMenu.OriginX(), m.contextMenu.OriginY(),
+			m.contextMenu.Render(), finalRender)
 	}
 
 	if m.helpMenu.IsOpen() {

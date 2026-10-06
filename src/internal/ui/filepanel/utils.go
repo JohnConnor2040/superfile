@@ -154,13 +154,13 @@ func (m *Model) SetSelectionAnchor(index int) {
 
 // SelectRangeToIndex selects every element between the recorded anchor and the
 // given index, inclusive. The anchor is left where it was, so repeated range
-// selections keep measuring from the same starting point and can be shrunk as
-// well as grown.
+// selections keep measuring from the same starting point.
 //
-// Entries that are already selected stay selected, so a range never silently
-// drops something that was picked earlier; a modifier click on a single entry is
-// how one is removed. It reports whether a range was selected, which is false
-// when there is no usable anchor.
+// The range can only grow: entries that are already selected stay selected, so
+// a range never silently drops something that was picked earlier. Shrinking is
+// done with a modifier click on a single entry, which clears the rest of the
+// selection. It reports whether a range was selected, which is false when there
+// is no usable anchor.
 func (m *Model) SelectRangeToIndex(index int) bool {
 	if m.selectionAnchor == "" || index < 0 || index >= len(m.element) {
 		return false
