@@ -7,6 +7,7 @@ import (
 
 	"github.com/yorukot/superfile/src/internal/common"
 	"github.com/yorukot/superfile/src/internal/mouse"
+	"github.com/yorukot/superfile/src/internal/ui/filepanel"
 	"github.com/yorukot/superfile/src/pkg/utils"
 )
 
@@ -57,6 +58,12 @@ func (m *model) handleMouseMsg(msg tea.MouseMsg) tea.Cmd {
 	return m.handleMouseClick(click.Mouse())
 }
 
+// isSelectionMod reports whether the modifiers turn a click into a selection
+// gesture rather than a plain pointer move.
+func isSelectionMod(mod tea.KeyMod) bool {
+	return mod.Contains(tea.ModCtrl) || mod.Contains(tea.ModShift)
+}
+
 // handleMouseClick acts on a completed button press.
 func (m *model) handleMouseClick(event tea.Mouse) tea.Cmd {
 	if event.Button != tea.MouseLeft {
@@ -66,12 +73,12 @@ func (m *model) handleMouseClick(event tea.Mouse) tea.Cmd {
 
 	target := m.mouseTargetAt(event.X, event.Y)
 
-	// A click carrying a modifier is part of building a selection rather than
-	// pointing at something, so it never counts as a double click and it
-	// clears any pending pair. Without this, ctrl clicking a row twice to
+	// A click carrying a selection modifier is part of building a selection
+	// rather than pointing at something, so it never counts as a double click
+	// and it clears any pending pair. Without this, ctrl clicking a row twice to
 	// deselect it would read as a double click and open the file instead.
 	var isDoubleClick bool
-	if event.Mod.Contains(tea.ModCtrl) {
+	if isSelectionMod(event.Mod) {
 		m.lastLeftClick = leftClick{}
 	} else {
 		isDoubleClick = m.noteLeftClick(target)
@@ -128,12 +135,45 @@ func (m *model) handleFilePanelClick(target mouse.Target, mod tea.KeyMod, isDoub
 		return nil
 	}
 
-	// Ctrl click adds to or removes from the selection instead of only moving
-	// the cursor, so a set of files can be built up before copying.
-	if mod.Contains(tea.ModCtrl) {
-		panel.ToggleSelected(panel.GetElementAtIdx(target.ItemIndex).Location)
+	if !m.applyClickSelection(panel, target.ItemIndex, mod) {
+		return nil
+	}
+
+	// Copy, paste and delete only read the selection while the panel is in
+	// SelectMode, so a selection built with the pointer has to put the panel in
+	// that mode or it would be ignored by every one of those actions.
+	if panel.SelectedCount() > 0 {
+		panel.SetPanelMode(filepanel.SelectMode)
 	}
 	return nil
+}
+
+// applyClickSelection acts on the modifiers of a click that landed on a file
+// entry. It reports whether the click changed the selection.
+func (m *model) applyClickSelection(panel *filepanel.Model, itemIndex int, mod tea.KeyMod) bool {
+	switch {
+	case mod.Contains(tea.ModCtrl):
+		// Ctrl click adds the entry to the selection, or removes it when it is
+		// already selected, and it becomes the anchor for a later range.
+		panel.SetSelectionAnchor(itemIndex)
+		panel.ToggleSelected(panel.GetElementAtIdx(itemIndex).Location)
+		return true
+	case mod.Contains(tea.ModShift):
+		// Shift click selects everything between the anchor and this entry. The
+		// anchor stays put so that a second shift click can shrink the range.
+		if panel.SelectRangeToIndex(itemIndex) {
+			return true
+		}
+		// Without a usable anchor there is no range to extend, so the click
+		// points at the entry and becomes the anchor for the next one.
+		panel.SetSelectionAnchor(itemIndex)
+		return false
+	default:
+		// An unmodified click only points at the entry, but it still sets the
+		// anchor so that a following shift click has a starting point.
+		panel.SetSelectionAnchor(itemIndex)
+		return false
+	}
 }
 
 // handleSidebarDirectoryClick moves the sidebar cursor and navigates to the

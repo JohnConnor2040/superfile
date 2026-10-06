@@ -10,11 +10,19 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/yorukot/superfile/src/internal/mouse"
+	"github.com/yorukot/superfile/src/internal/ui/filepanel"
 )
 
 // leftClickAt builds a left button press at the given terminal coordinates.
 func leftClickAt(x, y int) tea.MouseClickMsg {
 	return tea.MouseClickMsg{X: x, Y: y, Button: tea.MouseLeft}
+}
+
+// shiftClickAt builds a shift modified left button press.
+func shiftClickAt(x, y int) tea.MouseClickMsg {
+	click := leftClickAt(x, y)
+	click.Mod = tea.ModShift
+	return click
 }
 
 // ctrlClickAt builds a ctrl modified left button press.
@@ -123,6 +131,153 @@ func TestCtrlClickTogglesSelection(t *testing.T) {
 	// Clicking the same row again removes it from the selection.
 	m.handleMouseMsg(ctrlClickAt(x, y))
 	assert.False(t, panel.CheckSelected(third.Location))
+}
+
+// TestCtrlClickSwitchesPanelToSelectMode guards the reason a pointer built
+// selection works at all: copy, paste and delete only read the selection while
+// the panel is in SelectMode, so selecting without switching modes would leave
+// the selection inert.
+func TestCtrlClickSwitchesPanelToSelectMode(t *testing.T) {
+	dir := dirWithFiles(t, 5)
+	m := defaultTestModel(dir)
+	panel := m.getFocusedFilePanel()
+	require.Equal(t, filepanel.BrowserMode, panel.PanelMode)
+
+	x, y := mustFindCell(t, m, mouse.TargetFilePanelItem, 0)
+	m.handleMouseMsg(ctrlClickAt(x, y))
+
+	assert.Equal(t, filepanel.SelectMode, panel.PanelMode)
+	assert.Equal(t, uint(1), panel.SelectedCount())
+}
+
+// TestShiftClickSelectsRangeBetweenAnchorAndClick checks the range gesture,
+// including that it works towards the start of the listing as well.
+func TestShiftClickSelectsRangeBetweenAnchorAndClick(t *testing.T) {
+	for _, tc := range []struct {
+		name          string
+		anchor        int
+		target        int
+		wantSelected  []int
+		wantCursorAt  int
+		wantUnchosenI int
+	}{
+		{name: "forwards", anchor: 1, target: 3, wantSelected: []int{1, 2, 3}},
+		{name: "backwards", anchor: 3, target: 1, wantSelected: []int{1, 2, 3}},
+		{name: "single element range", anchor: 2, target: 2, wantSelected: []int{2}},
+		{name: "to the first element", anchor: 3, target: 0, wantSelected: []int{0, 1, 2, 3}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := dirWithFiles(t, 6)
+			m := defaultTestModel(dir)
+			panel := m.getFocusedFilePanel()
+
+			x, y := mustFindCell(t, m, mouse.TargetFilePanelItem, tc.anchor)
+			m.handleMouseMsg(leftClickAt(x, y))
+
+			x, y = mustFindCell(t, m, mouse.TargetFilePanelItem, tc.target)
+			m.handleMouseMsg(shiftClickAt(x, y))
+
+			assert.Equal(t, tc.wantSelected, selectedIndices(t, panel))
+			assert.Equal(t, tc.target, panel.GetCursor(),
+				"a shift click still points at the clicked entry")
+			assert.Equal(t, filepanel.SelectMode, panel.PanelMode)
+		})
+	}
+}
+
+// TestShiftClickKeepsAnchorAndCanShrinkRange checks that the anchor is not moved
+// by a range click, so a second one measures from the same starting point.
+func TestShiftClickKeepsAnchorAndCanShrinkRange(t *testing.T) {
+	dir := dirWithFiles(t, 6)
+	m := defaultTestModel(dir)
+	panel := m.getFocusedFilePanel()
+
+	x, y := mustFindCell(t, m, mouse.TargetFilePanelItem, 1)
+	m.handleMouseMsg(leftClickAt(x, y))
+
+	x, y = mustFindCell(t, m, mouse.TargetFilePanelItem, 4)
+	m.handleMouseMsg(shiftClickAt(x, y))
+	assert.Equal(t, []int{1, 2, 3, 4}, selectedIndices(t, panel))
+
+	// Measuring from the same anchor leaves 1..2 selected. Entries already
+	// selected are kept, so this can only grow here, which is why shrinking is
+	// done with a ctrl click.
+	x, y = mustFindCell(t, m, mouse.TargetFilePanelItem, 2)
+	m.handleMouseMsg(shiftClickAt(x, y))
+	assert.Equal(t, []int{1, 2, 3, 4}, selectedIndices(t, panel),
+		"a range never drops earlier picks")
+}
+
+// TestShiftClickWithoutAnchorJustPoints checks the fallback when there is no
+// anchor to extend from, such as the first click in a fresh panel.
+func TestShiftClickWithoutAnchorJustPoints(t *testing.T) {
+	dir := dirWithFiles(t, 6)
+	m := defaultTestModel(dir)
+	panel := m.getFocusedFilePanel()
+
+	x, y := mustFindCell(t, m, mouse.TargetFilePanelItem, 3)
+	m.handleMouseMsg(shiftClickAt(x, y))
+
+	assert.Equal(t, uint(0), panel.SelectedCount())
+	assert.Equal(t, 3, panel.GetCursor())
+
+	// The click became the anchor, so the next range click has a start.
+	x, y = mustFindCell(t, m, mouse.TargetFilePanelItem, 1)
+	m.handleMouseMsg(shiftClickAt(x, y))
+	assert.Equal(t, []int{1, 2, 3}, selectedIndices(t, panel))
+}
+
+// TestShiftClickDoesNotEnterDirectory makes sure a modifier click cannot be read
+// as a double click, which would navigate away from the listing being selected.
+func TestShiftClickDoesNotEnterDirectory(t *testing.T) {
+	dir := dirWithFiles(t, 6)
+	m := defaultTestModel(dir)
+	panel := m.getFocusedFilePanel()
+
+	dirIndex := panel.FindElementIndexByName("subdir")
+	require.NotEqual(t, -1, dirIndex)
+
+	x, y := mustFindCell(t, m, mouse.TargetFilePanelItem, dirIndex)
+	m.handleMouseMsg(leftClickAt(x, y))
+	m.handleMouseMsg(shiftClickAt(x, y))
+
+	assert.Equal(t, dir, panel.Location, "a shift click must not enter the directory")
+}
+
+// TestCtrlClickSelectionIsUsedByCopy is the end to end check that a pointer
+// built selection reaches the actions that consume it, which is what the
+// SelectMode switch in the click handler exists for.
+func TestCtrlClickSelectionIsUsedByCopy(t *testing.T) {
+	dir := dirWithFiles(t, 5)
+	m := defaultTestModel(dir)
+	panel := m.getFocusedFilePanel()
+
+	var first, third string
+	x, y := mustFindCell(t, m, mouse.TargetFilePanelItem, 0)
+	m.handleMouseMsg(ctrlClickAt(x, y))
+	first = panel.GetElementAtIdx(0).Location
+
+	x, y = mustFindCell(t, m, mouse.TargetFilePanelItem, 2)
+	m.handleMouseMsg(ctrlClickAt(x, y))
+	third = panel.GetElementAtIdx(2).Location
+
+	require.Equal(t, filepanel.SelectMode, panel.PanelMode)
+	assert.Equal(t, first+"\n"+third, m.copyPathText(),
+		"copy should take the two ctrl clicked entries, not just the focused one")
+}
+
+// selectedIndices returns the sorted element indices of everything currently
+// selected, which is easier to assert on than a set of paths.
+func selectedIndices(t *testing.T, panel *filepanel.Model) []int {
+	t.Helper()
+
+	var indices []int
+	for i := range panel.ElemCount() {
+		if panel.CheckSelected(panel.GetElementAtIdx(i).Location) {
+			indices = append(indices, i)
+		}
+	}
+	return indices
 }
 
 // TestDoubleClickEntersDirectory checks that two quick clicks on a directory
