@@ -63,7 +63,7 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	slog.Debug("model.Update() called", "msgType", reflect.TypeOf(msg))
 
 	var sidebarCmd, inputCmd, updateCmd, panelCmd, mouseCmd,
-		metadataCmd, filePreviewCmd, helpMenuCmd, resizeCmd tea.Cmd
+		metadataCmd, filePreviewCmd, helpMenuCmd, resizeCmd, pasteCmd tea.Cmd
 
 	// These are above the key message handing to prevent issues with firstKeyInput
 	// if someone presses `/` to focus to searchBar, searchBar will otherwise
@@ -79,6 +79,10 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		mouseCmd = m.handleMouseMsg(msg)
 	case tea.KeyPressMsg:
 		inputCmd = m.handleKeyInput(msg)
+	case tea.PasteMsg:
+		// A file manager dropping files onto the terminal arrives as pasted
+		// paths. Anything that has the keyboard already gets it below instead.
+		pasteCmd = m.handlePasteMsg(msg)
 
 	// Has to handle zoxide messages separately as they could be generated via
 	// zoxide update commands, or batched commands from textinput
@@ -108,7 +112,7 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	metadataCmd = m.getMetadataCmd()
 
 	return m, tea.Batch(sidebarCmd, helpMenuCmd, inputCmd, updateCmd,
-		panelCmd, mouseCmd, metadataCmd, filePreviewCmd, resizeCmd)
+		panelCmd, mouseCmd, pasteCmd, metadataCmd, filePreviewCmd, resizeCmd)
 }
 
 func (m *model) updateModelStateAfterMsg() {
