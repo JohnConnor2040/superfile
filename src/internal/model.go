@@ -2,6 +2,7 @@ package internal
 
 import (
 	"errors"
+	"fmt"
 	"log/slog"
 	"os"
 	"reflect"
@@ -461,6 +462,17 @@ func (m *model) createNewFilePanel(location string) (tea.Cmd, error) {
 
 func (m *model) splitPanel() (tea.Cmd, error) {
 	return m.createNewFilePanel(m.getFocusedFilePanel().Location)
+}
+
+// maxFilePanelReached tells the user why no panel was opened. Without this the
+// key press looks broken - nothing at all happens on screen.
+func (m *model) maxFilePanelReached() tea.Cmd {
+	msg := NewNotifyModalMsg(notify.New(true, "Cannot open another panel",
+		fmt.Sprintf("Terminal is too narrow for more panels (limit %d).", m.fileModel.MaxFilePanel),
+		notify.NoAction), m.nextIoReqCnt())
+	return func() tea.Msg {
+		return msg
+	}
 }
 
 func (m *model) createNewFilePanelRelativeToCurrent(path string) (tea.Cmd, error) {

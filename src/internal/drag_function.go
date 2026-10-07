@@ -1,6 +1,7 @@
 package internal
 
 import (
+	"fmt"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -269,8 +270,40 @@ func (m *model) finishDrag() tea.Cmd {
 		return nil
 	}
 
+	// A drop is a promise to move the files, so it is only kept when the user
+	// says so. The move is left for the confirmation to run, which is the same
+	// journey a quick accidental release would otherwise take a file on.
+	m.dragMoveToConfirm = moveToConfirm{dest: dest, locations: drag.locations}
 	slog.Debug("dropping dragged items", "count", len(drag.locations), "dest", dest)
-	return m.getMoveItemsCmd(dest, drag.locations)
+
+	reqID := m.nextIoReqCnt()
+	return func() tea.Msg {
+		return NewNotifyModalMsg(m.dragMoveWarnModal(len(drag.locations), dest), reqID)
+	}
+}
+
+// dragMoveWarnModal builds the confirmation that decides whether a drop moves
+// the dragged items, naming where they would end up.
+func (m *model) dragMoveWarnModal(count int, dest string) notify.Model {
+	content := fmt.Sprintf("%s\n%d item(s) -> %s", common.DragMoveWarnContent, count, dest)
+	return notify.New(true, common.DragMoveWarnTitle, content, notify.MoveAction)
+}
+
+// cancelPendingMove forgets a drop without a confirmation, leaving the files
+// where they were dragged from.
+func (m *model) cancelPendingMove() {
+	m.dragMoveToConfirm = moveToConfirm{}
+}
+
+// confirmDragMoveCmd runs the move the confirmation agreed to, dropping the
+// pending request once it is handed to the file processor.
+func (m *model) confirmDragMoveCmd() tea.Cmd {
+	pending := m.dragMoveToConfirm
+	m.dragMoveToConfirm = moveToConfirm{}
+	if pending.dest == "" || len(pending.locations) == 0 {
+		return nil
+	}
+	return m.getMoveItemsCmd(pending.dest, pending.locations)
 }
 
 // clearDrag forgets any drag and takes the drop highlight back off the panels.

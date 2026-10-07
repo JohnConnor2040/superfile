@@ -77,11 +77,37 @@ func (m *Model) updateChildComponentWidth() {
 	}
 
 	m.SinglePanelWidth = panelWidth
-	m.MaxFilePanel = widthForPanels / filepanel.MinWidth
-	// Cap at the system maximum
-	if m.MaxFilePanel > common.FilePanelMax {
-		m.MaxFilePanel = common.FilePanelMax
+	m.MaxFilePanel = m.maxPanelCount()
+}
+
+// maxPanelCount returns how many file panels fit in the current width while
+// keeping every panel at least filepanel.MinWidth wide.
+//
+// The preview width depends on the panel count when Config.FilePreviewWidth is
+// 0, so the space left over for the current panel count can't be reused for the
+// limit - that reserves too much for the preview and blocks panel creation that
+// would actually render fine. Each candidate count is checked against the
+// preview width it would really get.
+func (m *Model) maxPanelCount() int {
+	maxPanels := 1
+	for n := 1; n <= common.FilePanelMax; n++ {
+		widthForPanels := m.Width
+		if m.FilePreview.IsOpen() {
+			widthForPanels -= m.previewWidthForPanelCount(n)
+		}
+		if widthForPanels/n < filepanel.MinWidth {
+			break
+		}
+		maxPanels = n
 	}
+	return maxPanels
+}
+
+func (m *Model) previewWidthForPanelCount(panelCount int) int {
+	if common.Config.FilePreviewWidth == 0 {
+		return m.Width / (panelCount + 1)
+	}
+	return m.Width / common.Config.FilePreviewWidth
 }
 
 func (m *Model) ensurePreviewDimensionsSync() tea.Cmd {

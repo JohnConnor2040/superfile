@@ -13,6 +13,7 @@ import (
 	"github.com/yorukot/superfile/src/internal/common"
 	"github.com/yorukot/superfile/src/internal/mouse"
 	"github.com/yorukot/superfile/src/internal/ui/filepanel"
+	"github.com/yorukot/superfile/src/internal/ui/notify"
 	"github.com/yorukot/superfile/src/pkg/utils"
 )
 
@@ -50,6 +51,41 @@ func runCmd(cmd tea.Cmd) {
 	if cmd != nil {
 		cmd()
 	}
+}
+
+// applyCmd runs a returned command and feeds its result back into the model the
+// way the bubbletea loop would, so a message that only changes state, like the
+// drag-drop confirmation, actually takes effect.
+func applyCmd(t *testing.T, m *model, cmd tea.Cmd) {
+	t.Helper()
+	require.NotNil(t, cmd)
+	msg := cmd()
+	require.NotNil(t, msg)
+	TeaUpdate(m, msg)
+}
+
+// confirmDragMove resolves a drag-drop confirmation with the confirm key, which
+// is what a user pressing enter does, and runs the move it hands back.
+func confirmDragMove(t *testing.T, m *model) {
+	t.Helper()
+	require.True(t, m.notifyModel.IsOpen(), "a drop over a directory should ask for confirmation")
+	require.Equal(t, notify.MoveAction, m.notifyModel.GetConfirmAction(),
+		"the drop should be the move kind of confirmation")
+	cmd := TeaUpdate(m, tea.KeyPressMsg{Code: tea.KeyEnter})
+	require.NotNil(t, cmd, "confirming a drop should start the move")
+	runCmd(cmd)
+}
+
+// cancelDragMove dismisses a drag-drop confirmation with the cancel key, which
+// is what a user pressing escape does, and leaves the files where they were.
+func cancelDragMove(t *testing.T, m *model) {
+	t.Helper()
+	require.True(t, m.notifyModel.IsOpen(), "a drop over a directory should ask for confirmation")
+	require.Equal(t, notify.MoveAction, m.notifyModel.GetConfirmAction(),
+		"the drop should be the move kind of confirmation")
+	TeaUpdate(m, utils.TeaRuneKeyMsg(common.Hotkeys.CancelTyping[0]))
+	require.False(t, m.notifyModel.IsOpen(), "cancelling should close the confirmation")
+	require.Empty(t, m.dragMoveToConfirm.dest, "the cancelled drop should be forgotten")
 }
 
 // fileRow returns the element index of the first plain file in a panel.
@@ -131,14 +167,45 @@ func TestDragMovesFileIntoDirectory(t *testing.T) {
 	startDrag(t, m, fromX, fromY, toX, toY)
 	cmd := m.handleMouseMsg(mouseReleaseAt(toX, toY))
 
-	require.NotNil(t, cmd, "dropping on a directory should start a move")
-	runCmd(cmd)
+	require.NotNil(t, cmd, "dropping on a directory should ask for confirmation")
+	applyCmd(t, m, cmd)
+	confirmDragMove(t, m)
 
 	assert.Eventually(t, func() bool {
 		return fileExists(filepath.Join(dest, filepath.Base(moved)))
 	}, DefaultTestTimeout, DefaultTestTick,
 		"the dragged file should end up inside the dropped directory")
 	assert.NoFileExists(t, moved, "the file should have left where it was")
+}
+
+// TestDropWithoutConfirmationMovesNothing checks that a drop only moves files
+// once the confirmation says so, which is the protection against an accidental
+// drag.
+func TestDropWithoutConfirmationMovesNothing(t *testing.T) {
+	dir := dirWithFiles(t, 5)
+	m := defaultTestModel(dir)
+	panel := m.getFocusedFilePanel()
+
+	srcRow := lastRow(panel)
+	moved := panel.GetElementAtIdx(srcRow).Location
+	destRow := mustDirectoryRow(t, panel)
+	dest := panel.GetElementAtIdx(destRow).Location
+
+	fromX, fromY := mustFindCell(t, m, mouse.TargetFilePanelItem, srcRow)
+	toX, toY := mustFindCell(t, m, mouse.TargetFilePanelItem, destRow)
+
+	startDrag(t, m, fromX, fromY, toX, toY)
+	cmd := m.handleMouseMsg(mouseReleaseAt(toX, toY))
+	require.NotNil(t, cmd, "dropping on a directory should ask for confirmation")
+	applyCmd(t, m, cmd)
+
+	require.True(t, m.notifyModel.IsOpen(), "the drop should wait for confirmation")
+	assert.FileExists(t, moved, "the drop alone must not move anything")
+	assert.NoFileExists(t, filepath.Join(dest, filepath.Base(moved)),
+		"the drop alone must not move anything")
+
+	cancelDragMove(t, m)
+	assert.FileExists(t, moved, "cancelling must leave the file where it was")
 }
 
 // TestDragIntoOtherPanelUsesThatPanelsDirectory checks that the destination comes
@@ -199,7 +266,8 @@ func TestDragIntoOtherPanelUsesThatPanelsDirectory(t *testing.T) {
 			cmd := m.handleMouseMsg(mouseReleaseAt(toX, toY))
 
 			require.NotNil(t, cmd, "the area around a panel is a drop target")
-			runCmd(cmd)
+			applyCmd(t, m, cmd)
+			confirmDragMove(t, m)
 
 			assert.Eventually(t, func() bool {
 				return fileExists(filepath.Join(other, filepath.Base(moved)))
@@ -329,7 +397,8 @@ func TestDragIntoSidebarDirectory(t *testing.T) {
 
 	cmd := m.handleMouseMsg(mouseReleaseAt(toX, toY))
 	require.NotNil(t, cmd, "a sidebar directory is a drop target")
-	runCmd(cmd)
+	applyCmd(t, m, cmd)
+	confirmDragMove(t, m)
 
 	assert.Eventually(t, func() bool {
 		return fileExists(filepath.Join(home, filepath.Base(moved)))
@@ -434,7 +503,8 @@ func TestDragCarriesWholeSelection(t *testing.T) {
 
 	cmd := m.handleMouseMsg(mouseReleaseAt(toX, toY))
 	require.NotNil(t, cmd)
-	runCmd(cmd)
+	applyCmd(t, m, cmd)
+	confirmDragMove(t, m)
 
 	assert.Eventually(t, func() bool {
 		return fileExists(filepath.Join(dest, filepath.Base(first))) &&
@@ -467,7 +537,9 @@ func TestDragOutsideSelectionCarriesOnlyThatEntry(t *testing.T) {
 	require.Equal(t, []string{other}, m.drag.locations,
 		"dragging an unselected row carries only that row")
 
-	m.handleMouseMsg(mouseReleaseAt(toX, toY))
+	cmd := m.handleMouseMsg(mouseReleaseAt(toX, toY))
+	applyCmd(t, m, cmd)
+	cancelDragMove(t, m)
 }
 
 // TestDragDoesNotLeaveAPendingDoubleClick checks a drag cannot be mistaken for the
@@ -512,7 +584,8 @@ func TestReleaseDropsWhereThePointerActuallyIs(t *testing.T) {
 
 	cmd := m.handleMouseMsg(mouseReleaseAt(secondX, secondY))
 	require.NotNil(t, cmd, "the release over the second directory is a drop")
-	runCmd(cmd)
+	applyCmd(t, m, cmd)
+	confirmDragMove(t, m)
 
 	assert.Eventually(t, func() bool {
 		return fileExists(filepath.Join(second, "moved.txt"))
@@ -599,7 +672,9 @@ func TestDragDoesNotLeaveAPendingDoubleClick(t *testing.T) {
 		"starting a drag should clear the recorded click, or the next click would open the file")
 
 	// A second click right after the drag must therefore not be a double click.
-	m.handleMouseMsg(mouseReleaseAt(toX, toY))
+	cmd := m.handleMouseMsg(mouseReleaseAt(toX, toY))
+	applyCmd(t, m, cmd)
+	cancelDragMove(t, m)
 	m.handleMouseMsg(leftClickAt(fromX, fromY))
 	assert.Equal(t, mouse.Target{
 		Kind:       mouse.TargetFilePanelItem,

@@ -76,6 +76,9 @@ type model struct {
 	// drag is the drag in progress, if any. It is empty when no drag is running.
 	drag            dragState
 	mutexErrorModal sync.Mutex
+	// dragMoveToConfirm remembers where a dropped drag has been told to go until
+	// the confirmation decides whether the move really happens.
+	dragMoveToConfirm moveToConfirm
 
 	// Zoxide client for directory tracking
 	zClient *zoxidelib.Client
@@ -114,6 +117,13 @@ type model struct {
 	// rebuilt on every render pass, so it always describes the frame currently
 	// on screen rather than the layout as it will be after the next update.
 	mouseRegions mouse.Registry
+}
+
+// moveToConfirm remembers where a dropped drag has been told to go until the
+// confirmation decides whether the move really happens.
+type moveToConfirm struct {
+	dest      string
+	locations []string
 }
 
 type typingModal struct {
