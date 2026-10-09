@@ -96,6 +96,10 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case preview.UpdateMsg:
 		slog.Debug("Got ModelUpdate message", "id", msg.GetReqID())
 		updateCmd = m.fileModel.UpdatePreviewPanel(msg)
+	case preview.CliampTickMsg:
+		// Re-render the highlighted audio file so its cliamp spectrum keeps
+		// animating. UpdatePreviewPanel schedules the next tick.
+		filePreviewCmd = m.fileModel.GetFilePreviewAnimCmd()
 	case ModelUpdateMessage:
 		slog.Debug("Got ModelUpdate message", "id", msg.GetReqID())
 		updateCmd = msg.ApplyToModel(m)
@@ -108,7 +112,9 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	panelCmd = m.updateComponentState(msg)
 
 	m.updateModelStateAfterMsg()
-	filePreviewCmd = m.fileModel.GetFilePreviewCmd(false)
+	if filePreviewCmd == nil {
+		filePreviewCmd = m.fileModel.GetFilePreviewCmd(false)
+	}
 
 	metadataCmd = m.getMetadataCmd()
 
